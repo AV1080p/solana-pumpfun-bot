@@ -16,7 +16,7 @@ use crate::engine::transaction_parser::{TradeInfoFromToken, DexType};
 use crate::engine::swap::{SwapDirection, SwapProtocol, SwapInType};
 use crate::dex::pump_fun::Pump;
 use crate::dex::pump_swap::PumpSwap;
-use crate::services::{jupiter::JupiterClient, balance_manager::BalanceManager};
+use crate::services::balance_manager::BalanceManager;
 
 /// Token account information for bulk selling
 #[derive(Debug, Clone)]
@@ -30,101 +30,6 @@ pub struct WalletTokenInfo {
 
 const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
-const JUPITER_API_URL: &str = "https://quote-api.jup.ag";
-
-// Jupiter API structures (copied from main.rs for bulk selling)
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct JupiterQuoteResponse {
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "outAmount")]
-    out_amount: String,
-    #[serde(rename = "otherAmountThreshold")]
-    other_amount_threshold: String,
-    #[serde(rename = "swapMode")]
-    swap_mode: String,
-    #[serde(rename = "slippageBps")]
-    slippage_bps: u16,
-    #[serde(rename = "platformFee")]
-    platform_fee: Option<PlatformFeeInfo>,
-    #[serde(rename = "priceImpactPct")]
-    price_impact_pct: Option<String>,
-    #[serde(rename = "routePlan")]
-    route_plan: Vec<RoutePlanEntry>,
-    #[serde(rename = "contextSlot")]
-    context_slot: u64,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct PlatformFeeInfo {
-    amount: String,
-    #[serde(rename = "feeBps")]
-    fee_bps: u64,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct RoutePlanEntry {
-    #[serde(rename = "swapInfo")]
-    swap_info: SwapInfoEntry,
-    percent: u8,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct SwapInfoEntry {
-    label: String,
-    #[serde(rename = "ammKey")]
-    amm_key: String,
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String,
-    #[serde(rename = "outAmount")]
-    out_amount: String,
-    #[serde(rename = "feeAmount")]
-    fee_amount: String,
-    #[serde(rename = "feeMint")]
-    fee_mint: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct PrioritizationFeeLamports {
-    #[serde(rename = "priorityLevelWithMaxLamports")]
-    priority_level_with_max_lamports: PriorityLevelWithMaxLamports,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct PriorityLevelWithMaxLamports {
-    #[serde(rename = "maxLamports")]
-    max_lamports: u64,
-    #[serde(rename = "priorityLevel")]
-    priority_level: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct JupiterSwapRequest {
-    #[serde(rename = "quoteResponse")]
-    quote_response: JupiterQuoteResponse,
-    #[serde(rename = "userPublicKey")]
-    user_public_key: String,
-    #[serde(rename = "wrapAndUnwrapSol")]
-    wrap_and_unwrap_sol: bool,
-    #[serde(rename = "dynamicComputeUnitLimit")]
-    dynamic_compute_unit_limit: bool,
-    #[serde(rename = "prioritizationFeeLamports")]
-    prioritization_fee_lamports: PrioritizationFeeLamports,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct JupiterSwapResponse {
-    #[serde(rename = "swapTransaction")]
-    swap_transaction: String,
-}
 /// Simple selling engine for basic buy/sell operations
 #[derive(Clone)]
 pub struct SimpleSellingEngine {
