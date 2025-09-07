@@ -346,7 +346,7 @@ impl BalanceMonitorService {
             .map_err(|e| anyhow::anyhow!("Failed to create sync native instruction: {}", e))?);
         
         // Send transaction using zeroslot for minimal latency
-        let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
+        let recent_blockhash = match self.app_state.rpc_client.get_latest_blockhash() {
             Some(hash) => hash,
             None => return Err(anyhow::anyhow!("Failed to get recent blockhash for SOL wrapping")),
         };
