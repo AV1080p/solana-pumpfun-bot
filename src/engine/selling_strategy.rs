@@ -326,33 +326,19 @@ impl SimpleSellingEngine {
                     detected_buy_amount_decimal
                 ).cyan().to_string());
 
-                // Execute Jupiter sell for decided amount
-                match self.execute_jupiter_sell(&trade_info.mint, detected_buy_amount_raw, token_decimals).await {
+                // Create sell config
+                let mut sell_config = (*self.swap_config).clone();
+                sell_config.swap_direction = SwapDirection::Sell;
+                sell_config.amount_in = detected_buy_amount_decimal;
+
+                match self.execute_sell_with_retries(trade_info, sell_config, (detected_buy_amount_raw, token_decimals)).await {
                     Ok(signature) => {
-                        self.logger.log(format!("Jupiter sell successful: {}", signature).green().to_string());
+                        self.logger.log(format!("Sell successful: {}", signature).green().to_string());
                         Ok(signature)
                     },
-                    Err(jupiter_error) => {
-                        self.logger.log(format!("Jupiter sell failed: {}", jupiter_error).red().to_string());
-                        
-                        // Fallback to native protocols if Jupiter fails and we have balance info
-                        self.logger.log("Trying native protocols as fallback...".cyan().to_string());
-                        
-                        // Create sell config
-                        let mut sell_config = (*self.swap_config).clone();
-                        sell_config.swap_direction = SwapDirection::Sell;
-                        sell_config.amount_in = detected_buy_amount_decimal;
-
-                        match self.execute_sell_with_retries(trade_info, sell_config, (detected_buy_amount_raw, token_decimals)).await {
-                            Ok(signature) => {
-                                self.logger.log(format!("Native sell fallback successful: {}", signature).green().to_string());
-                                Ok(signature)
-                            },
-                            Err(native_error) => {
-                                self.logger.log(format!("Both Jupiter and native sell failed. Jupiter: {}, Native: {}", jupiter_error, native_error).red().to_string());
-                                Err(anyhow!("All sell attempts failed. Jupiter: {}, Native: {}", jupiter_error, native_error))
-                            }
-                        }
+                    Err(e) => {
+                        self.logger.log(format!("Sell failed: {}", e).red().to_string());
+                        Err(e)
                     }
                 }
             },
@@ -412,24 +398,9 @@ impl SimpleSellingEngine {
 
             match result {
                 Ok(signature) => {
-                    // Verify transaction success
-                    let jupiter_client = JupiterClient::new(self.app_state.rpc_nonblocking_client.clone());
-                    match jupiter_client.verify_transaction(&signature).await {
-                        Ok(true) => {
-                            self.logger.log(format!("Sell attempt {} verified successfully: {}", attempt, signature).green().to_string());
-                            return Ok(signature);
-                        },
-                        Ok(false) => {
-                            let error_msg = format!("Sell attempt {} transaction failed verification: {}", attempt, signature);
-                            self.logger.log(error_msg.clone().red().to_string());
-                            last_error = Some(anyhow!(error_msg));
-                        },
-                        Err(e) => {
-                            let error_msg = format!("Sell attempt {} verification error: {}", attempt, e);
-                            self.logger.log(error_msg.clone().red().to_string());
-                            last_error = Some(anyhow!(error_msg));
-                        }
-                    }
+                    // Transaction sent successfully
+                    self.logger.log(format!("Sell attempt {} sent successfully: {}", attempt, signature).green().to_string());
+                    return Ok(signature);
                 },
                 Err(e) => {
                     self.logger.log(format!("Sell attempt {} failed: {}", attempt, e).red().to_string());
@@ -490,35 +461,6 @@ impl SimpleSellingEngine {
         }
     }
 
-    /// Execute Jupiter sell as fallback
-    async fn execute_jupiter_sell(&self, token_mint: &str, token_amount_raw: u64, _token_decimals: u8) -> Result<String> {
-        self.logger.log(format!("Executing Jupiter fallback sell for token: {} (amount: {})", token_mint, token_amount_raw).magenta().to_string());
-        
-        let jupiter_client = JupiterClient::new(self.app_state.rpc_nonblocking_client.clone());
-        
-        // Use 100 bps (1%) slippage for Jupiter
-        let slippage_bps = 100;
-        
-        let result = jupiter_client.sell_token_with_jupiter(
-            token_mint,
-            token_amount_raw,
-            slippage_bps,
-            &self.app_state.wallet
-        ).await;
-        
-        // Trigger balance management after successful Jupiter sell
-        if result.is_ok() {
-            self.logger.log("🔄 Triggering SOL/WSOL balance management after Jupiter sell...".cyan().to_string());
-            let balance_manager = BalanceManager::new(self.app_state.clone());
-            if let Err(e) = balance_manager.manage_balances_after_selling().await {
-                self.logger.log(format!("⚠️ Balance management failed: {}", e).red().to_string());
-            } else {
-                self.logger.log("✅ Balance management completed successfully".green().to_string());
-            }
-        }
-        
-        result
-    }
 
     /// Public method to sell all tokens in wallet using Jupiter API
     /// This mimics the functionality of "cargo r -- --sell" command

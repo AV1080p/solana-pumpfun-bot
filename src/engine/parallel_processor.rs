@@ -11,7 +11,7 @@ use crate::common::{
 };
 use crate::engine::transaction_parser::TradeInfoFromToken;
 use crate::engine::selling_strategy::SimpleSellingEngine;
-use crate::services::{jupiter::JupiterClient, balance_manager::BalanceManager};
+use crate::services::balance_manager::BalanceManager;
 
 /// Transaction operation type for parallel processing
 #[derive(Debug, Clone)]
@@ -37,7 +37,6 @@ pub struct ParallelTransactionProcessor {
     swap_config: Arc<SwapConfig>,
     transaction_landing_mode: crate::common::config::TransactionLandingMode,
     selling_engine: SimpleSellingEngine,
-    jupiter_client: JupiterClient,
     balance_manager: BalanceManager,
     logger: Logger,
     // Channels for communication
@@ -58,7 +57,6 @@ impl ParallelTransactionProcessor {
             transaction_landing_mode.clone(),
         );
         
-        let jupiter_client = JupiterClient::new(app_state.rpc_nonblocking_client.clone());
         let balance_manager = BalanceManager::new(app_state.clone());
         
         // Create channels for communication
@@ -70,7 +68,6 @@ impl ParallelTransactionProcessor {
             swap_config,
             transaction_landing_mode,
             selling_engine: selling_engine.clone(),
-            jupiter_client: jupiter_client.clone(),
             balance_manager: balance_manager.clone(),
             logger: Logger::new("[PARALLEL-PROCESSOR] => ".magenta().to_string()),
             operation_sender,
@@ -216,7 +213,6 @@ impl ParallelTransactionProcessor {
     /// Process sell operation with must-selling logic (multiple fallbacks)
     async fn process_sell_operation_with_must_selling(
         selling_engine: SimpleSellingEngine,
-        jupiter_client: JupiterClient,
         balance_manager: BalanceManager,
         trade_info: TradeInfoFromToken,
         logger: &Logger,
@@ -247,102 +243,12 @@ impl ParallelTransactionProcessor {
             }
         }
         
-        logger.log(format!("⚠️ All native DEX sell attempts failed for token: {}, trying Jupiter fallback", trade_info.mint).yellow().to_string());
-        
-        // Strategy 2: Jupiter API fallback (check token balance and sell using Jupiter)
-        match Self::attempt_jupiter_fallback_sell(&selling_engine, &jupiter_client, &trade_info, logger).await {
-            Ok(signature) => {
-                logger.log(format!("✅ Jupiter fallback sell completed for token: {}", trade_info.mint).green().bold().to_string());
-                
-                // Trigger balance management after successful Jupiter sell
-                if let Err(e) = balance_manager.manage_balances_after_selling().await {
-                    logger.log(format!("⚠️ Balance management failed after Jupiter sell: {}", e).yellow().to_string());
-                }
-                
-                return Ok(signature);
-            },
-            Err(jupiter_error) => {
-                logger.log(format!("❌ Jupiter fallback also failed for token {}: {}", trade_info.mint, jupiter_error).red().to_string());
-                last_error = Some(jupiter_error);
-            }
-        }
+        logger.log(format!("⚠️ All native DEX sell attempts failed for token: {}", trade_info.mint).yellow().to_string());
         
         // If all strategies fail, return the last error
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All sell strategies failed for token {}", trade_info.mint)))
     }
     
-    /// Attempt Jupiter fallback selling
-    async fn attempt_jupiter_fallback_sell(
-        selling_engine: &SimpleSellingEngine,
-        jupiter_client: &JupiterClient,
-        trade_info: &TradeInfoFromToken,
-        logger: &Logger,
-    ) -> Result<String> {
-        logger.log(format!("🪐 Attempting Jupiter fallback sell for token: {}", trade_info.mint).magenta().to_string());
-        
-        // Check if we have any balance of this token
-        use std::str::FromStr;
-        use anchor_client::solana_sdk::pubkey::Pubkey;
-        use spl_associated_token_account::get_associated_token_address;
-        
-        let wallet_pubkey = selling_engine.app_state().wallet.try_pubkey()
-            .map_err(|e| anyhow::anyhow!("Failed to get wallet pubkey: {}", e))?;
-        
-        let token_pubkey = Pubkey::from_str(&trade_info.mint)
-            .map_err(|e| anyhow::anyhow!("Invalid token mint: {}", e))?;
-        
-        let ata = get_associated_token_address(&wallet_pubkey, &token_pubkey);
-        
-        // Get token balance
-        match selling_engine.app_state().rpc_nonblocking_client.get_token_account(&ata).await {
-            Ok(Some(account)) => {
-                let amount_raw = account.token_amount.amount.parse::<u64>()
-                    .map_err(|e| anyhow::anyhow!("Failed to parse token amount: {}", e))?;
-                
-                if amount_raw == 0 {
-                    logger.log(format!("ℹ️ No balance found for token {}, skipping Jupiter sell", trade_info.mint).yellow().to_string());
-                    return Ok(format!("No balance for {}", trade_info.mint));
-                }
-                
-                let decimals = account.token_amount.decimals;
-                logger.log(format!("💰 Found balance for token {}: {} raw units", trade_info.mint, amount_raw).green().to_string());
-                
-                // Perform Jupiter sell with retries
-                const JUPITER_RETRIES: u32 = 3;
-                for attempt in 1..=JUPITER_RETRIES {
-                    logger.log(format!("🪐 Jupiter sell attempt {}/{} for token: {}", attempt, JUPITER_RETRIES, trade_info.mint).blue().to_string());
-                    
-                    match jupiter_client.sell_token_with_jupiter(
-                        &trade_info.mint,
-                        amount_raw,
-                        100, // 1% slippage
-                        &selling_engine.app_state().wallet
-                    ).await {
-                        Ok(signature) => {
-                            logger.log(format!("✅ Jupiter sell successful (attempt {}): {}", attempt, signature).green().bold().to_string());
-                            return Ok(signature);
-                        },
-                        Err(e) => {
-                            logger.log(format!("⚠️ Jupiter sell attempt {}/{} failed: {}", attempt, JUPITER_RETRIES, e).yellow().to_string());
-                            
-                            if attempt < JUPITER_RETRIES {
-                                tokio::time::sleep(Duration::from_secs(2)).await;
-                            }
-                        }
-                    }
-                }
-                
-                Err(anyhow::anyhow!("All Jupiter sell attempts failed"))
-            },
-            Ok(None) => {
-                logger.log(format!("ℹ️ No token account found for {}, nothing to sell", trade_info.mint).yellow().to_string());
-                Ok(format!("No token account for {}", trade_info.mint))
-            },
-            Err(e) => {
-                Err(anyhow::anyhow!("Failed to check token balance: {}", e))
-            }
-        }
-    }
     
     /// Get processing statistics
     pub async fn get_processing_stats(&self) -> (usize, usize) {

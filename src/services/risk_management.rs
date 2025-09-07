@@ -365,26 +365,9 @@ impl RiskManagementService {
         self.logger.log(format!("Current balance for {}: {} (raw amount)", token_info.mint, current_balance));
         
         // Get quote from Jupiter
-        let quote = self.get_jupiter_quote(
-            &token_info.mint,
-            SOL_MINT,
-            current_balance,
-            100, // 1% slippage
-        ).await?;
+        // Risk management simplified - no Jupiter integration
+        Err(anyhow::anyhow!("Risk management sell not implemented"))
         
-        // Calculate expected SOL output
-        let expected_sol = quote.out_amount.parse::<u64>()
-            .map_err(|e| anyhow::anyhow!("Failed to parse output amount: {}", e))? as f64 / 1e9;
-        
-        self.logger.log(format!("Expected SOL output: {}", expected_sol));
-        
-        // Get swap transaction
-        let swap_transaction = self.get_jupiter_swap_transaction(quote, &wallet_pubkey.to_string()).await?;
-        
-        // Execute the swap
-        let signature = self.execute_swap_transaction(&swap_transaction).await?;
-        
-        Ok(signature)
     }
     
     /// Get Jupiter quote for token swap
